@@ -3,14 +3,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Trophy,
   RotateCcw,
+  Award,
+  Star,
+  User,
   ShieldCheck,
   Volume2,
   VolumeX,
   Play,
   Pause,
-  Star,
-  User,
-  Award,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -21,7 +21,7 @@ type Player = {
   name: string;
   image: string;
   score: number;
-  reasons: string[]; // reasons (already gendered text)
+  reasons: string[]; // gendered reason fragments
   gender: Gender;
 };
 
@@ -29,20 +29,57 @@ type Category = {
   id: string;
   name: string;
   points: number;
-  color: string; // tailwind classes
+  color: string;
   reasonMale?: string;
   reasonFemale?: string;
 };
+
+const STORAGE_KEY = 'mamad_game_players_v2';
 
 const BG_MUSIC_URL =
   'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/fauda.mpeg';
 
 const INITIAL_PLAYERS: Player[] = [
-  { id: 'ophir', name: 'אופיר', image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/ophir.png', score: 0, reasons: [], gender: 'male' },
-  { id: 'yifat', name: 'יפעת', image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/yifat.png', score: 0, reasons: [], gender: 'female' },
-  { id: 'ethan', name: 'איתן', image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/ethan.png', score: 0, reasons: [], gender: 'male' },
-  { id: 'tommy', name: 'תומי', image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/tommy.png', score: 0, reasons: [], gender: 'male' },
-  { id: 'ronny', name: 'רוני', image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/ronny.png', score: 0, reasons: [], gender: 'male' },
+  {
+    id: 'ophir',
+    name: 'אופיר',
+    image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/ophir.png',
+    score: 0,
+    reasons: [],
+    gender: 'male',
+  },
+  {
+    id: 'yifat',
+    name: 'יפעת',
+    image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/yifat.png',
+    score: 0,
+    reasons: [],
+    gender: 'female',
+  },
+  {
+    id: 'ethan',
+    name: 'איתן',
+    image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/ethan.png',
+    score: 0,
+    reasons: [],
+    gender: 'male',
+  },
+  {
+    id: 'tommy',
+    name: 'תומי',
+    image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/tommy.png',
+    score: 0,
+    reasons: [],
+    gender: 'male',
+  },
+  {
+    id: 'ronny',
+    name: 'רוני',
+    image: 'https://raw.githubusercontent.com/yifatdanieli-lab/mamad-game/main/images/ronny.png',
+    score: 0,
+    reasons: [],
+    gender: 'male',
+  },
 ];
 
 const CATEGORIES: Category[] = [
@@ -98,84 +135,114 @@ function uniq<T>(arr: T[]) {
   return Array.from(new Set(arr));
 }
 
+function joinHebrewWithV(parts: string[]) {
+  if (parts.length <= 1) return parts[0] ?? '';
+  if (parts.length === 2) return `${parts[0]} ו${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')} ו${parts[parts.length - 1]}`;
+}
+
 export default function App() {
-  const [players, setPlayers] = useState<Player[]>(INITIAL_PLAYERS);
+  // Players (persisted)
+  const [players, setPlayers] = useState<Player[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return INITIAL_PLAYERS;
+    try {
+      const parsed = JSON.parse(saved) as Player[];
+      // basic safety
+      if (!Array.isArray(parsed) || parsed.length === 0) return INITIAL_PLAYERS;
+      return parsed;
+    } catch {
+      return INITIAL_PLAYERS;
+    }
+  });
 
-  // Intro overlay (tap to start)
+  // UI state
   const [showIntro, setShowIntro] = useState(true);
-
-  // Results overlay
   const [showResults, setShowResults] = useState(false);
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
 
-  // Audio
-  const [musicPlaying, setMusicPlaying] = useState(false);
+  // Sound & music
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [musicPlaying, setMusicPlaying] = useState(false);
   const musicRef = useRef<HTMLAudioElement | null>(null);
 
-  // Category “who was dropped here” visual (last few avatars)
+  // Visual “who dropped here”
   const [categoryDrops, setCategoryDrops] = useState<Record<string, string[]>>(() => {
     const init: Record<string, string[]> = {};
     for (const c of CATEGORIES) init[c.id] = [];
     return init;
   });
-
-  // Category highlight effect on drop
   const [highlightCategoryId, setHighlightCategoryId] = useState<string | null>(null);
 
+  // Mobile detection (simple + stable)
+  const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth < 768);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Persist players
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(players));
+  }, [players]);
+
+  const playerById = useMemo(() => {
+    const m = new Map<string, Player>();
+    players.forEach(p => m.set(p.id, p));
+    return m;
+  }, [players]);
+
+  // Leaders (for crowns and winners)
   const leaders = useMemo(() => {
     const max = Math.max(...players.map(p => p.score));
     if (max <= 0) return [];
     return players.filter(p => p.score === max);
   }, [players]);
 
-  const sortedPlayers = useMemo(
-    () => [...players].sort((a, b) => b.score - a.score),
-    [players]
-  );
+  const sortedPlayers = useMemo(() => {
+    return [...players].sort((a, b) => b.score - a.score);
+  }, [players]);
 
   const startMusic = () => {
-    const music = musicRef.current;
-    if (!music) return;
-    music.volume = 0.35;
-    music.play().then(() => setMusicPlaying(true)).catch(() => {});
+    const audio = musicRef.current;
+    if (!audio) return;
+    audio.volume = 0.35;
+    audio.play().then(() => setMusicPlaying(true)).catch(() => {});
   };
 
   const stopMusic = () => {
-    const music = musicRef.current;
-    if (!music) return;
-    music.pause();
+    const audio = musicRef.current;
+    if (!audio) return;
+    audio.pause();
     setMusicPlaying(false);
   };
 
   const toggleMusic = () => {
+    if (!soundEnabled) return; // if muted, don't start
     if (musicPlaying) stopMusic();
     else startMusic();
   };
 
-  // If user mutes, pause music; if un-mutes and musicPlaying was true, try resume
+  // If user mutes - stop music
   useEffect(() => {
-    const music = musicRef.current;
-    if (!music) return;
-
     if (!soundEnabled) {
-      music.pause();
-      return;
+      stopMusic();
     }
-
-    if (musicPlaying) {
-      music.play().catch(() => {});
-    }
-  }, [soundEnabled, musicPlaying]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soundEnabled]);
 
   const addDropVisual = (categoryId: string, playerId: string) => {
     setCategoryDrops(prev => {
-      const current = prev[categoryId] ?? [];
-      const next = [playerId, ...current].slice(0, 6); // show up to 6
+      const curr = prev[categoryId] ?? [];
+      const next = [playerId, ...curr].slice(0, 6);
       return { ...prev, [categoryId]: next };
     });
 
     setHighlightCategoryId(categoryId);
-    window.setTimeout(() => setHighlightCategoryId(curr => (curr === categoryId ? null : curr)), 550);
+    window.setTimeout(() => {
+      setHighlightCategoryId(curr => (curr === categoryId ? null : curr));
+    }, 550);
   };
 
   const handleScore = (playerId: string, category: Category) => {
@@ -199,33 +266,51 @@ export default function App() {
     );
 
     addDropVisual(category.id, playerId);
+
+    // small audio feedback - keep it simple and reliable
+    if (soundEnabled) {
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = category.points > 0 ? 880 : 220;
+        gain.gain.value = 0.08;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+        setTimeout(() => ctx.close().catch(() => {}), 200);
+      } catch {}
+    }
   };
 
-  const buildReasonSentence = (player: Player) => {
-    const uniqueReasons = uniq(player.reasons);
-    if (uniqueReasons.length === 0) return '';
-
-    const joined =
-      uniqueReasons.length === 1
-        ? uniqueReasons[0]
-        : `${uniqueReasons.slice(0, -1).join(', ')} ו${uniqueReasons.slice(-1)[0]}`;
-
-    return player.gender === 'female' ? `זכתה כי ${joined}.` : `זכה כי ${joined}.`;
+  const buildReasonSentence = (p: Player) => {
+    const reasons = uniq(p.reasons);
+    if (reasons.length === 0) return '';
+    const joined = joinHebrewWithV(reasons);
+    return p.gender === 'female' ? `זכתה כי ${joined}.` : `זכה כי ${joined}.`;
   };
 
   const resetGame = () => {
-    setPlayers(INITIAL_PLAYERS);
-    setShowResults(false);
-    const cleared: Record<string, string[]> = {};
-    for (const c of CATEGORIES) cleared[c.id] = [];
-    setCategoryDrops(cleared);
+    if (confirm('האם לאפס את כל השימיות?')) {
+      setPlayers(INITIAL_PLAYERS);
+      setShowResults(false);
+      setSelectedPlayerId(null);
+      localStorage.removeItem(STORAGE_KEY);
+      const cleared: Record<string, string[]> = {};
+      for (const c of CATEGORIES) cleared[c.id] = [];
+      setCategoryDrops(cleared);
+    }
   };
 
   const openResults = () => {
     setShowResults(true);
     if (leaders.length > 0) {
-      confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
-      setTimeout(() => confetti({ particleCount: 180, spread: 100, origin: { y: 0.5 } }), 220);
+      confetti({ particleCount: 160, spread: 85, origin: { y: 0.62 } });
+      setTimeout(() => {
+        confetti({ particleCount: 220, spread: 110, origin: { y: 0.58 } });
+      }, 220);
     }
   };
 
@@ -235,24 +320,14 @@ export default function App() {
     return 'w-40 h-40 sm:w-48 sm:h-48';
   };
 
-  const winnerGridCols = (count: number) => {
-    if (count <= 1) return 'grid-cols-1';
-    if (count === 2) return 'grid-cols-2';
-    if (count === 3) return 'grid-cols-3';
-    return 'grid-cols-5'; // for 4-5 winners
-  };
-
-  const playerById = useMemo(() => {
-    const m = new Map<string, Player>();
-    players.forEach(p => m.set(p.id, p));
-    return m;
-  }, [players]);
-
   return (
-    <div className="min-h-screen bg-stone-50 text-stone-900 font-sans selection:bg-emerald-100 pb-20" dir="rtl">
+    <div
+      className="min-h-screen bg-stone-50 text-stone-900 font-sans selection:bg-emerald-100 pb-24"
+      dir="rtl"
+    >
       <audio ref={musicRef} src={BG_MUSIC_URL} loop preload="auto" />
 
-      {/* Intro Overlay - click to start + starts music */}
+      {/* Intro overlay (tap to start music) */}
       <AnimatePresence>
         {showIntro && (
           <motion.div
@@ -262,15 +337,15 @@ export default function App() {
             className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6"
             onClick={() => {
               setShowIntro(false);
-              startMusic();
+              if (soundEnabled) startMusic();
             }}
           >
             <div className="text-center">
               <div className="text-white text-3xl sm:text-5xl font-black leading-tight">
-                הקש למשחק הממ"דים המטורף של השנה
+                הקש למשחק הממ&quot;דים המטורף של השנה
               </div>
               <div className="mt-4 text-white/80 text-sm sm:text-base">
-               באווירת פורים ובסגנון פאודה
+                טיפ: אפשר לכבות/להדליק מוזיקה בכפתור למעלה
               </div>
             </div>
           </motion.div>
@@ -284,7 +359,7 @@ export default function App() {
             <div className="bg-emerald-600 p-2 rounded-xl text-white shadow-lg shadow-emerald-200">
               <ShieldCheck size={24} />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight">מצטייני הממ"ד</h1>
+            <h1 className="text-2xl font-bold tracking-tight">מצטייני הממ&quot;ד</h1>
           </div>
 
           <div className="flex items-center gap-2">
@@ -294,23 +369,11 @@ export default function App() {
               title={musicPlaying ? 'עצור מוזיקה' : 'נגן מוזיקה'}
             >
               {musicPlaying ? <Pause size={16} /> : <Play size={16} />}
-              <span>מוזיקה</span>
+              <span className="hidden sm:inline">מוזיקה</span>
             </button>
 
             <button
-              onClick={() => {
-                setSoundEnabled(v => {
-                  const next = !v;
-                  if (!next) {
-                    // mute: pause music immediately too
-                    musicRef.current?.pause();
-                  } else {
-                    // unmute: if musicPlaying, try resume
-                    if (musicPlaying) musicRef.current?.play().catch(() => {});
-                  }
-                  return next;
-                });
-              }}
+              onClick={() => setSoundEnabled(v => !v)}
               className="p-2 rounded-full hover:bg-stone-100 transition-colors text-stone-500"
               title={soundEnabled ? 'השתק' : 'הפעל קול'}
             >
@@ -322,97 +385,152 @@ export default function App() {
               className="flex items-center gap-2 px-3 py-2 rounded-lg text-stone-600 hover:bg-stone-100 transition-colors text-sm font-medium"
             >
               <RotateCcw size={16} />
-              <span>איפוס</span>
+              <span className="hidden sm:inline">איפוס</span>
             </button>
           </div>
         </div>
 
-        {/* Opening paragraph - restored */}
+        {/* Opening paragraph */}
         <div className="max-w-4xl mx-auto mt-4">
           <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 text-stone-800">
-            <div className="font-bold mb-2">ברוכים השבים לממ"ד שלנו!</div>
+            <div className="font-bold mb-2">ברוכים השבים לממ&quot;ד שלנו!</div>
             <div className="leading-relaxed">
-              גם היום אתם יכולים לזכות בהרבה שימיות. שימו לב, כל שהיה בממ"ד מקנה שימיות מחדש,
-              לכן אל חשש, עדיין תוכלו לזכות הפעם. מי יהיו מצטייני הממ"ד שלנו היום?
+              גם היום אתם יכולים לזכות בהרבה שימיות. שימו לב, כל שהיה בממ&quot;ד מקנה שימיות מחדש,
+              לכן אל חשש, עדיין תוכלו לזכות הפעם. מי יהיו מצטייני הממ&quot;ד שלנו היום?
             </div>
           </div>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
-        {/* Players Section */}
-        <section className="mb-10">
-          <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-stone-600">
+        {/* Players */}
+        <section className="mb-8">
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-stone-600">
             <User size={18} />
-            גרור שחקן לקטגוריה כדי להוסיף שימיות:
+            {isMobile ? 'לחצו על שחקן ואז על קטגוריה:' : 'גרור שחקן לקטגוריה כדי להוסיף שימיות:'}
           </h2>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
-            {players.map((player) => (
-              <motion.div
-                key={player.id}
-                drag
-                dragSnapToOrigin
-                whileDrag={{ scale: 1.08, zIndex: 50 }}
-                className="relative group cursor-grab active:cursor-grabbing"
-                style={{ touchAction: 'none' }}
-                onDragEnd={(_, info) => {
-                  const elements = document.elementsFromPoint(info.point.x, info.point.y);
-                  const categoryElement = elements.find(el => (el as HTMLElement).hasAttribute?.('data-category-id'));
-                  if (categoryElement) {
-                    const categoryId = (categoryElement as HTMLElement).getAttribute('data-category-id');
-                    const category = CATEGORIES.find(c => c.id === categoryId);
-                    if (category) {
-                      handleScore(player.id, category);
-                    }
-                  }
-                }}
-              >
-                <div className="bg-white p-3 rounded-2xl border border-stone-200 shadow-sm transition-all group-hover:shadow-md group-hover:border-emerald-200 flex flex-col items-center gap-3">
-                  <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-stone-100 bg-stone-50">
-                    {/* IMPORTANT: pointer-events-none so drag works even if you grab the image */}
-                    <img
-                      src={player.image}
-                      alt={player.name}
-                      className="w-full h-full object-cover pointer-events-none select-none"
-                      draggable={false}
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-                  <span className="font-bold text-lg">{player.name}</span>
-                  <div className="bg-stone-100 px-2 py-0.5 rounded-full text-xs font-mono font-semibold text-stone-500">
-                    {player.score} שמ׳
-                  </div>
+          {/* Mobile selected banner */}
+          {isMobile && (
+            <div className="mb-4">
+              <div className="bg-white border border-stone-200 rounded-2xl p-4 flex items-center justify-between">
+                <div className="text-stone-600 text-sm font-medium">נבחר:</div>
+                <div className="font-black text-lg">
+                  {selectedPlayerId ? playerById.get(selectedPlayerId)?.name : 'אף אחד'}
                 </div>
-              </motion.div>
-            ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
+            {players.map(player => {
+              const selected = selectedPlayerId === player.id;
+
+              // Mobile: tap to select
+              if (isMobile) {
+                return (
+                  <button
+                    key={player.id}
+                    onClick={() => setSelectedPlayerId(player.id)}
+                    className={[
+                      'bg-white p-3 rounded-2xl border shadow-sm transition-all flex flex-col items-center gap-3',
+                      selected ? 'border-emerald-300 ring-4 ring-emerald-200' : 'border-stone-200',
+                    ].join(' ')}
+                  >
+                    <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-stone-100 bg-stone-50">
+                      <img
+                        src={player.image}
+                        alt={player.name}
+                        className="w-full h-full object-cover pointer-events-none select-none"
+                        draggable={false}
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <span className="font-bold text-lg">{player.name}</span>
+                    <div className="bg-stone-100 px-2 py-0.5 rounded-full text-xs font-mono font-semibold text-stone-500">
+                      {player.score} שמ׳
+                    </div>
+                  </button>
+                );
+              }
+
+              // Desktop: drag
+              return (
+                <motion.div
+                  key={player.id}
+                  drag
+                  dragSnapToOrigin
+                  whileDrag={{ scale: 1.08, zIndex: 50 }}
+                  className="relative group cursor-grab active:cursor-grabbing"
+                  style={{ touchAction: 'none' }}
+                  onDragEnd={(_, info) => {
+                    const elements = document.elementsFromPoint(info.point.x, info.point.y);
+                    const categoryElement = elements.find(el =>
+                      (el as HTMLElement).hasAttribute?.('data-category-id')
+                    );
+                    if (categoryElement) {
+                      const categoryId = (categoryElement as HTMLElement).getAttribute('data-category-id');
+                      const category = CATEGORIES.find(c => c.id === categoryId);
+                      if (category) handleScore(player.id, category);
+                    }
+                  }}
+                >
+                  <div className="bg-white p-3 rounded-2xl border border-stone-200 shadow-sm transition-all group-hover:shadow-md group-hover:border-emerald-200 flex flex-col items-center gap-3">
+                    <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-stone-100 bg-stone-50">
+                      <img
+                        src={player.image}
+                        alt={player.name}
+                        className="w-full h-full object-cover pointer-events-none select-none"
+                        draggable={false}
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <span className="font-bold text-lg">{player.name}</span>
+                    <div className="bg-stone-100 px-2 py-0.5 rounded-full text-xs font-mono font-semibold text-stone-500">
+                      {player.score} שמ׳
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
           </div>
         </section>
 
-        {/* Categories Section */}
+        {/* Categories */}
         <section className="mb-10">
-          <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-stone-600">
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-stone-600">
             <Star size={18} />
             קטגוריות:
           </h2>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {CATEGORIES.map((category) => {
+            {CATEGORIES.map(category => {
               const dropped = categoryDrops[category.id] ?? [];
               const isHot = highlightCategoryId === category.id;
 
+              const mobileClickable = isMobile && !!selectedPlayerId;
+
               return (
-                <div
+                <button
                   key={category.id}
+                  type="button"
                   data-category-id={category.id}
+                  onClick={() => {
+                    if (!isMobile) return;
+                    if (!selectedPlayerId) return;
+                    handleScore(selectedPlayerId, category);
+                  }}
                   className={[
-                    'p-5 rounded-2xl border-2 border-dashed transition-all flex flex-col gap-3',
+                    'p-5 rounded-2xl border-2 border-dashed transition-all flex flex-col gap-3 text-right',
                     category.color,
-                    isHot ? 'ring-4 ring-emerald-300/60 scale-[1.01]' : 'hover:scale-[1.01] active:scale-[0.99]',
+                    isHot ? 'ring-4 ring-emerald-300/60 scale-[1.01]' : '',
+                    isMobile ? 'active:scale-[0.99]' : 'hover:scale-[1.01] active:scale-[0.99]',
+                    mobileClickable ? '' : isMobile ? 'opacity-70' : '',
                   ].join(' ')}
+                  // If mobile and no selection, we still let tap but show “disabled” feel. If you want hard block, add disabled attr.
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="font-bold text-lg">{category.name}</div>
+                    <div className={`font-black ${isMobile ? 'text-xl' : 'text-lg'}`}>{category.name}</div>
                     <div className={`text-xl font-black ${category.points > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                       {category.points > 0 ? `+${category.points}` : category.points}
                     </div>
@@ -421,7 +539,9 @@ export default function App() {
                   {/* Visual: show who was dropped here recently */}
                   <div className="flex items-center gap-2 min-h-[34px]">
                     {dropped.length === 0 ? (
-                      <div className="text-xs opacity-70">גררו לכאן שחקן</div>
+                      <div className="text-xs opacity-70">
+                        {isMobile ? 'בחרו שחקן ואז לחצו כאן' : 'גררו לכאן שחקן'}
+                      </div>
                     ) : (
                       <AnimatePresence initial={false}>
                         {dropped.slice(0, 6).map((pid, idx) => {
@@ -450,7 +570,7 @@ export default function App() {
                       </AnimatePresence>
                     )}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -481,7 +601,13 @@ export default function App() {
                       {index + 1}.
                     </span>
                     <div className="w-10 h-10 rounded-full overflow-hidden border border-stone-200">
-                      <img src={player.image} alt={player.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" draggable={false} />
+                      <img
+                        src={player.image}
+                        alt={player.name}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                        draggable={false}
+                      />
                     </div>
                     <span className={`font-bold ${isLeader ? 'text-stone-900' : 'text-stone-700'}`}>
                       {player.name}
@@ -490,7 +616,11 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <span className={`text-xl font-black font-mono ${player.score > 0 ? 'text-emerald-600' : player.score < 0 ? 'text-rose-600' : 'text-stone-400'}`}>
+                    <span
+                      className={`text-xl font-black font-mono ${
+                        player.score > 0 ? 'text-emerald-600' : player.score < 0 ? 'text-rose-600' : 'text-stone-400'
+                      }`}
+                    >
                       {player.score}
                     </span>
                     <span className="text-xs text-stone-400 font-medium">שמ׳</span>
@@ -505,7 +635,7 @@ export default function App() {
         <div className="flex justify-center mt-6">
           <button
             onClick={openResults}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-10 py-5 rounded-2xl font-bold text-2xl shadow-2xl shadow-emerald-200 transition-all active:scale-95 flex items-center gap-3"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-10 py-5 rounded-2xl font-black text-2xl shadow-2xl shadow-emerald-200 transition-all active:scale-95 flex items-center gap-3"
           >
             <Award size={26} />
             הצג תוצאות
@@ -529,7 +659,7 @@ export default function App() {
               exit={{ scale: 0.92, y: 26 }}
               transition={{ type: 'spring', stiffness: 260, damping: 18 }}
               className="bg-white rounded-[28px] w-full max-w-5xl overflow-hidden shadow-[0_30px_80px_rgba(0,0,0,0.5)]"
-              onClick={(e) => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
             >
               <div className="bg-gradient-to-br from-emerald-700 via-emerald-600 to-emerald-500 p-7 text-white text-center">
                 <div className="mx-auto mb-3 w-14 h-14 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center">
@@ -539,7 +669,7 @@ export default function App() {
                   {leaders.length > 1 ? 'מצטייני הממ"ד!' : leaders.length === 1 ? 'מצטיין הממ"ד!' : 'אין עדיין מנצחים'}
                 </div>
                 <div className="text-base sm:text-lg opacity-90">
-                  {leaders.length > 0 ? 'טקס הכרזה רשמי - שאפו ענק!' : 'צריך לצבור שימיות כדי להכריז על מנצח.'}
+                  {leaders.length > 0 ? 'טקס הכרזה רשמי - שאפו ענק!' : 'צריך לצבור שימיות כדי להכריז.'}
                 </div>
               </div>
 
@@ -549,18 +679,34 @@ export default function App() {
                     <div
                       className={[
                         'grid gap-6 w-full place-items-center',
-                        leaders.length === 1 ? 'grid-cols-1' : leaders.length === 2 ? 'grid-cols-2' : leaders.length === 3 ? 'grid-cols-3' : leaders.length === 4 ? 'grid-cols-4' : 'grid-cols-5',
+                        leaders.length === 1
+                          ? 'grid-cols-1'
+                          : leaders.length === 2
+                          ? 'grid-cols-2'
+                          : leaders.length === 3
+                          ? 'grid-cols-3'
+                          : leaders.length === 4
+                          ? 'grid-cols-4'
+                          : 'grid-cols-5',
                       ].join(' ')}
                     >
-                      {leaders.map((winner) => {
+                      {leaders.map(winner => {
                         const size = winnerSizeClass(leaders.length);
                         const sentence = buildReasonSentence(winner);
 
                         return (
                           <div key={winner.id} className="text-center w-full max-w-[320px]">
                             <div className="relative mb-4 flex justify-center">
-                              <div className={`rounded-full overflow-hidden border-8 border-emerald-100 shadow-[0_25px_60px_rgba(16,185,129,0.25)] ${size}`}>
-                                <img src={winner.image} alt={winner.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" draggable={false} />
+                              <div
+                                className={`rounded-full overflow-hidden border-8 border-emerald-100 shadow-[0_25px_60px_rgba(16,185,129,0.25)] ${size}`}
+                              >
+                                <img
+                                  src={winner.image}
+                                  alt={winner.name}
+                                  className="w-full h-full object-cover"
+                                  referrerPolicy="no-referrer"
+                                  draggable={false}
+                                />
                               </div>
                               <div className="absolute -bottom-2 -right-2 bg-amber-400 text-white p-3 rounded-full shadow-xl">
                                 <Trophy size={22} />
@@ -573,9 +719,7 @@ export default function App() {
                             </div>
 
                             {sentence ? (
-                              <div className="mt-2 text-sm sm:text-base text-stone-600 leading-snug">
-                                {sentence}
-                              </div>
+                              <div className="mt-2 text-sm sm:text-base text-stone-600 leading-snug">{sentence}</div>
                             ) : (
                               <div className="mt-2 text-sm text-stone-400">אין סיבות זכייה עדיין</div>
                             )}

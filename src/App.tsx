@@ -345,7 +345,7 @@ export default function App() {
                 הקש למשחק הממ&quot;דים המטורף של השנה
               </div>
               <div className="mt-4 text-white/80 text-sm sm:text-base">
-                טיפ: אפשר לכבות/להדליק מוזיקה בכפתור למעלה
+                ברוח פורים, בסגנון פאודה
               </div>
             </div>
           </motion.div>
